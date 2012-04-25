@@ -48,6 +48,14 @@ class TransactionTest extends UnitTest_TestCase{
             ->execute();
     }
 
+    /**
+     * This is an example of a transactional function. This function can contain code that you wish to execute within
+     * the database transaction.
+     *
+     * @param $a
+     * @param $b
+     * @return float
+     */
     function transactional_divide($a, $b)
     {
         return $a / $b;
