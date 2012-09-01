@@ -1,14 +1,21 @@
 <?php defined('SYSPATH') or die('No direct script access.');
 /**
- * Transactional unit of work executor.
+ * Database transactional unit of work executor.
  * 
  * @example 
  * <pre>
- * Transaction::factory($this->_db_group)
- *     ->rollback_exclusion(array('Exception'))
- *     ->call(array($this, 'add_folder'))
- *     ->with($group, $this->group_code, $_POST)
- *     ->execute();
+ *
+ * $name = 'World';
+ *
+ * $transaction = Transaction::factory($this->_database,
+ *   function() use ($name)
+ *   {
+ *     return 'Hello '.$name;
+ *   }
+ * )->rollback_exclusion('My_Exception');
+ *
+ * echo $transaction();
+ *
  * </pre>
  *
  * @author     Paul Schwarz <paulsschwarz@gmail.com>
@@ -17,11 +24,12 @@
 
 class Kohana_Transaction {
 	
-	private $_db, $_work, $_args, $_dont_rollback_for;
+	private $_db, $_work, $_dont_rollback_for;
 	
-	private function __construct($_db)
+	private function __construct(Database $db, callable $work)
     {
-		$this->_db = $_db;
+		$this->_db = $db;
+		$this->_work = $work;
 	}
 	
 	/**
@@ -31,7 +39,7 @@ class Kohana_Transaction {
      * @return Transaction
      * @throws Exception
 	 */
-	public static function factory($database_group)
+	public static function factory($database_group, callable $work)
     {
 		if ($database_group == null)
         {
@@ -40,11 +48,11 @@ class Kohana_Transaction {
 
         if (is_string($database_group))
         {
-            return new Transaction(Database::instance($database_group));
+            return new Transaction(Database::instance($database_group), $work);
         }
         else
         {
-            return new Transaction($database_group);
+            return new Transaction($database_group, $work);
         }
 	}
 	
@@ -60,49 +68,16 @@ class Kohana_Transaction {
 		$this->_dont_rollback_for = $dont_rollback_for;
 		return $this;
 	}
-	
-	/**
-	 * Supply a callback function to be executed as the transactional unit of work.
-	 * @param array $work callback function
-     * @return Transaction
-	 */
-	public function call(array $work)
-    {
-		$work[1] = 'transactional_'.$work[1];
-		$this->_work = $work;
-		return $this;
-	}
-	
-	/**
-	 * Bind the arguments that will be available to the callback function
-     * @return Transaction
-	 */
-	public function with()
-    {
-		$this->_args = func_get_args();
-		return $this;
-	}
-	
-	/**
-	 * Execute the transaction
-	 * @throws Exception
-     * @return result
-	 */
-	public function execute()
-    {
-		if (!is_callable($this->_work))
-        {
-			throw new Exception('"'.$this->_work[1].'" is not a valid callback function (must be public)');
-		}
-		
-		if ($this->_args == NULL)
-        {
-			$this->_args = array();
-		}
-		
-		return $this->_execute($this->_db, $this->_work, $this->_args);
-	}
 
+	/**
+	 * Execute the transaction.
+	 * @throws Exception
+	 * @return result
+	 */
+	public function __invoke()
+	{
+		return $this->_execute($this->_db, $this->_work);
+	}
 
     /**
      * Execute a transactional unit of work.
@@ -113,14 +88,15 @@ class Kohana_Transaction {
      * @throws Exception
      * @return result
      */
-	private function _execute(Database $database_instance, $work, $args)
+	private function _execute(Database $database_instance, callable $work)
     {
 		$database_instance->begin();
 		
 		try
         {
 			// Do the work as a transaction
-			$result = call_user_func_array($work, $args);
+			$result = call_user_func_array($work, []);
+
 			// Transaction successful, commit the changes
 			$database_instance->commit();
 		}
@@ -131,10 +107,12 @@ class Kohana_Transaction {
             {
 				// Transaction failed. Roll back changes
 				$database_instance->rollback();
-				
-				Log::instance()->add(Log::DEBUG, 'Rolled back transaction: :method', array(
-				    ':method' => $work[1],
-				));
+
+				$caller = debug_backtrace()[1];
+				Log::instance()->add(Log::DEBUG, 'Rolled back transaction: :file::line', [
+					':file' => $caller['file'],
+					':line' => $caller['line'],
+				]);
 			}
             else
             {
